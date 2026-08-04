@@ -1,0 +1,90 @@
+# Relay on Kubernetes.
+#
+# Deployment notes specific to Relay's design:
+# - replicas: 1 deliberately. Correctness under multiple replicas is already
+#   guaranteed (optimistic concurrency: a second writer loses cleanly), but
+#   without the lease/claim layer (ADR-0003, LIMITATIONS.md) extra replicas
+#   waste work by racing on the same runs. Scale out only after adding leases.
+# - Rolling deploys are safe mid-run: durable event log + startup crash
+#   recovery mean the new pod resumes whatever the old pod was doing.
+# - Secrets come from a Secret object; config from env (12-factor).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: relay
+  labels:
+    app: relay
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate   # avoid two pods driving the same runs during rollout (pre-lease design)
+  selector:
+    matchLabels:
+      app: relay
+  template:
+    metadata:
+      labels:
+        app: relay
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8000"
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+      containers:
+        - name: relay
+          image: relay:0.1.0   # replace with your registry path
+          ports:
+            - containerPort: 8000
+          env:
+            - name: RELAY_DATABASE_URL
+              valueFrom:
+                secretKeyRef:
+                  name: relay-secrets
+                  key: database-url
+            - name: RELAY_PROVIDER
+              value: "anthropic"
+            - name: RELAY_ANTHROPIC_API_KEY
+              valueFrom:
+                secretKeyRef:
+                  name: relay-secrets
+                  key: anthropic-api-key
+            - name: RELAY_OTEL_ENDPOINT
+              value: ""   # e.g. http://otel-collector:4318/v1/traces
+          resources:
+            requests:
+              cpu: 100m
+              memory: 256Mi
+            limits:
+              cpu: "1"
+              memory: 512Mi
+          readinessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 3
+            periodSeconds: 10
+          livenessProbe:
+            httpGet:
+              path: /healthz
+              port: 8000
+            initialDelaySeconds: 10
+            periodSeconds: 15
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: relay
+spec:
+  selector:
+    app: relay
+  ports:
+    - port: 80
+      targetPort: 8000
+---
+# Create the secret out-of-band (never commit real values):
+#   kubectl create secret generic relay-secrets \
+#     --from-literal=database-url='postgresql://user:pass@postgres:5432/relay' \
+#     --from-literal=anthropic-api-key='sk-ant-...'

@@ -1,0 +1,17 @@
+# Prometheus scrape config for Relay.
+# Local: prometheus --config.file=observability/prometheus.yml
+# (In Kubernetes, the pod annotations in k8s/deployment.yaml do this instead.)
+global:
+  scrape_interval: 15s
+
+scrape_configs:
+  - job_name: relay
+    metrics_path: /metrics
+    static_configs:
+      - targets: ["localhost:8000"]
+
+# Alerting ideas (wire to your Alertmanager):
+#   rate(relay_runs_finished_total{status="failed"}[5m]) above baseline
+#   relay_runs{status="awaiting_approval"} > 0 for > 4h
+#   increase(relay_llm_cost_usd_total[1h]) above budget
+#   rate(relay_budget_exceeded_total[15m]) > 0  (agents hitting circuit breakers)
