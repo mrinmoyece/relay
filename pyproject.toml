@@ -1,0 +1,52 @@
+[project]
+name = "relay-runtime"
+version = "0.1.0"
+description = "Relay - a durable, event-sourced runtime for AI agents"
+readme = "README.md"
+license = { file = "LICENSE" }
+requires-python = ">=3.10"
+authors = [{ name = "Mrinmoy Mandal" }]
+dependencies = [
+    "fastapi>=0.110",
+    "uvicorn[standard]>=0.29",
+    "pydantic>=2.6",
+    "pydantic-settings>=2.2",
+]
+
+[project.optional-dependencies]
+# Each integration is optional so the core runtime stays dependency-light.
+# The runtime degrades gracefully when an extra is not installed
+# (e.g. tracing becomes a no-op, the Anthropic provider raises a clear error).
+postgres = ["asyncpg>=0.29"]
+anthropic = ["anthropic>=0.25"]
+otel = [
+    "opentelemetry-api>=1.24",
+    "opentelemetry-sdk>=1.24",
+    "opentelemetry-exporter-otlp-proto-http>=1.24",
+]
+dev = [
+    "pytest>=8.0",
+    "pytest-asyncio>=0.23",
+    "httpx>=0.27",
+    "ruff>=0.4",
+]
+all = ["relay-runtime[postgres,anthropic,otel,dev]"]
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/relay"]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]
+addopts = "-q"
+
+[tool.ruff]
+line-length = 100
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "UP", "B"]
