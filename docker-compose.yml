@@ -1,0 +1,43 @@
+# Full durable stack: API + Postgres (+ optional Jaeger for traces).
+#   docker compose up --build
+#   curl -X POST localhost:8000/v1/runs -H 'content-type: application/json' \
+#        -d '{"goal": "What is (2+3)*7?"}'
+services:
+  api:
+    build: .
+    ports:
+      - "8000:8000"
+    environment:
+      RELAY_DATABASE_URL: postgresql://relay:relay@db:5432/relay
+      RELAY_PROVIDER: ${RELAY_PROVIDER:-mock}   # set to "anthropic" + key for real runs
+      RELAY_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
+      RELAY_OTEL_ENDPOINT: ${RELAY_OTEL_ENDPOINT:-}
+    depends_on:
+      db:
+        condition: service_healthy
+
+  db:
+    image: postgres:16-alpine
+    environment:
+      POSTGRES_USER: relay
+      POSTGRES_PASSWORD: relay
+      POSTGRES_DB: relay
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U relay"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Optional: `docker compose --profile tracing up` and set
+  # RELAY_OTEL_ENDPOINT=http://jaeger:4318/v1/traces to see run traces.
+  jaeger:
+    image: jaegertracing/all-in-one:1.57
+    profiles: ["tracing"]
+    ports:
+      - "16686:16686"   # UI
+      - "4318:4318"     # OTLP HTTP
+
+volumes:
+  pgdata:
