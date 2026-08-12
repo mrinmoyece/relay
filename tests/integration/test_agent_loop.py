@@ -155,6 +155,23 @@ async def test_provider_timeout_is_bounded_and_recorded(store):
     assert "timed out" in state.error
 
 
+async def test_unexpected_provider_exception_becomes_recorded_failure(store):
+    class BuggyProvider:
+        async def complete(self, *, model, messages, tools):
+            raise TypeError("adapter implementation bug")
+
+    engine = AgentEngine(
+        store=store,
+        provider=BuggyProvider(),
+        registry=ToolRegistry(),
+    )
+    run_id = await engine.create_run(goal="contain provider bugs")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert state.error == "provider_error: unexpected provider error: TypeError"
+    assert [record.event.type for record in await store.read(run_id)][-1] == "run_failed"
+
+
 async def test_persisted_execution_claim_fences_second_driver(store):
     executions = 0
 

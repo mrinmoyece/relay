@@ -314,6 +314,11 @@ class AgentEngine:
                 )
             except ProviderError as e:
                 last_error = e
+            except Exception as e:  # noqa: BLE001 - provider code is an adapter boundary
+                last_error = ProviderError(
+                    f"unexpected provider error: {type(e).__name__}",
+                    retryable=False,
+                )
             if last_error is not None:
                 log.warning(
                     "llm_attempt_failed",

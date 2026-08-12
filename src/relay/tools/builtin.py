@@ -21,6 +21,7 @@ from __future__ import annotations
 
 import ast
 import asyncio
+import math
 import operator
 from collections.abc import Awaitable, Callable
 from pathlib import Path
@@ -50,11 +51,21 @@ _MAX_ABS_RESULT = 1e100
 _MAX_FILE_CHARS = 1_000_000
 
 
-def _eval_node(node: ast.AST) -> float:
+def _checked_number(value: int | float) -> int | float:
+    if isinstance(value, bool):
+        raise ToolExecutionError("boolean values are not arithmetic operands", retryable=False)
+    if isinstance(value, float) and not math.isfinite(value):
+        raise ToolExecutionError("expression contains a non-finite value", retryable=False)
+    if abs(value) > _MAX_ABS_RESULT:
+        raise ToolExecutionError("expression value exceeds safe limits", retryable=False)
+    return value
+
+
+def _eval_node(node: ast.AST) -> int | float:
     if isinstance(node, ast.Expression):
         return _eval_node(node.body)
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
-        return node.value
+        return _checked_number(node.value)
     if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
         left = _eval_node(node.left)
         right = _eval_node(node.right)
@@ -63,11 +74,9 @@ def _eval_node(node: ast.AST) -> float:
         ):
             raise ToolExecutionError("power operation exceeds safe limits", retryable=False)
         result = _BIN_OPS[type(node.op)](left, right)
-        if abs(result) > _MAX_ABS_RESULT:
-            raise ToolExecutionError("expression result exceeds safe limits", retryable=False)
-        return result
+        return _checked_number(result)
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
-        return _UNARY_OPS[type(node.op)](_eval_node(node.operand))
+        return _checked_number(_UNARY_OPS[type(node.op)](_eval_node(node.operand)))
     raise ToolExecutionError(
         f"unsupported expression element: {type(node).__name__}", retryable=False
     )

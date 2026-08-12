@@ -83,4 +83,4 @@ Rehearse from LIMITATIONS.md — lead with: lease columns designed in from day o
 3. *Demo* (4 min): `make demo` — narrate the four stories, pausing on the ledger printouts.
 4. *Hard part deep-dive* (5 min): pick ONE — usually crash recovery + idempotency — and go to the bottom (two-generals, contracts, human escalation).
 5. *Honesty* (2 min): limitations + upgrade paths.
-6. *Numbers* (1 min): 60 tests, 6/6 CI-gated behavioral evals, zero-config runnable, and 4 core dependencies.
+6. *Numbers* (1 min): 66 tests, 6/6 CI-gated behavioral evals, zero-config runnable, and 4 core dependencies.
