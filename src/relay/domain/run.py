@@ -39,6 +39,7 @@ from relay.domain.events import (
     RunFailed,
     RunResumed,
     ToolCallRequested,
+    ToolExecutionStarted,
     ToolFailed,
     ToolSucceeded,
 )
@@ -80,6 +81,7 @@ class PendingCall:
     call: ToolCallSpec
     risk: RiskLevel
     approved: bool = False  # set once a human explicitly granted it
+    execution_started: bool = False
 
 
 @dataclass(frozen=True)
@@ -159,7 +161,11 @@ def apply(state: RunState, record: EventRecord) -> RunState:  # noqa: C901
 
     if isinstance(ev, RunResumed):
         _require(state, ev, RunStatus.RUNNING)
-        return replace(state, **base)
+        # A recovery worker may reclaim calls left between the persisted
+        # execution claim and result. Idempotency/HITL checks happen before
+        # RunResumed is appended (engine/recovery.py).
+        calls = tuple(replace(pc, execution_started=False) for pc in state.pending_calls)
+        return replace(state, pending_calls=calls, **base)
 
     if isinstance(ev, LLMResponded):
         _require(state, ev, RunStatus.RUNNING)
@@ -181,8 +187,27 @@ def apply(state: RunState, record: EventRecord) -> RunState:  # noqa: C901
             **base,
         )
 
+    if isinstance(ev, ToolExecutionStarted):
+        _require(state, ev, RunStatus.RUNNING)
+        pending = _require_pending_call(state, ev.call_id, ev.tool_name)
+        if pending.execution_started:
+            raise InvalidTransition(
+                f"run {state.run_id}: tool call {ev.call_id!r} already claimed"
+            )
+        calls = tuple(
+            replace(pc, execution_started=True)
+            if pc.call.call_id == ev.call_id
+            else pc
+            for pc in state.pending_calls
+        )
+        return replace(state, pending_calls=calls, **base)
+
     if isinstance(ev, ToolSucceeded):
         _require(state, ev, RunStatus.RUNNING)
+        # Claims were introduced after the original event schema. Historical
+        # ledgers may legitimately contain request -> result directly, so
+        # claim-before-effect is enforced by the engine and evals, not replay.
+        _require_pending_call(state, ev.call_id, ev.tool_name)
         msg = ChatMessage(role="tool", content=ev.output, tool_call_id=ev.call_id)
         return replace(
             state,
@@ -193,6 +218,7 @@ def apply(state: RunState, record: EventRecord) -> RunState:  # noqa: C901
 
     if isinstance(ev, ToolFailed):
         _require(state, ev, RunStatus.RUNNING)
+        _require_pending_call(state, ev.call_id, ev.tool_name)
         remaining = _without_call(state.pending_calls, ev.call_id)
         if ev.fatal:
             return replace(
@@ -306,3 +332,17 @@ def _check_approval_id(state: RunState, approval_id: str) -> None:
             f"{approval_id!r} but pending approval is "
             f"{state.pending_approval.approval_id if state.pending_approval else None!r}"
         )
+
+
+def _require_pending_call(
+    state: RunState,
+    call_id: str,
+    tool_name: str,
+) -> PendingCall:
+    pending = next((pc for pc in state.pending_calls if pc.call.call_id == call_id), None)
+    if pending is None or pending.call.tool_name != tool_name:
+        raise InvalidTransition(
+            f"run {state.run_id}: result references unknown tool call "
+            f"{tool_name!r}/{call_id!r}"
+        )
+    return pending

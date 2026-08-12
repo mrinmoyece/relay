@@ -27,6 +27,7 @@ def settings() -> Settings:
         tool_timeout_seconds=0.5,
         tool_max_attempts=3,
         llm_max_attempts=3,
+        llm_retry_backoff_seconds=0,
     )
 
 

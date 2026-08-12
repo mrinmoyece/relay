@@ -49,11 +49,21 @@ class RunManager:
         task.add_done_callback(lambda t: self._on_done(run_id, t))
         self._tasks[run_id] = task
 
-    async def recover(self) -> list[str]:
-        """Called at startup: resume anything a dead worker left RUNNING."""
-        return await recover_interrupted_runs(
-            store=self._store, engine=self._engine, registry=self._registry
+    async def recover(self, *, exclusive: bool) -> list[str]:
+        """Reconcile claims, then resume runs as tracked background tasks."""
+        recovered = await recover_interrupted_runs(
+            store=self._store,
+            engine=self._engine,
+            registry=self._registry,
+            exclusive=exclusive,
         )
+        for run_id in recovered:
+            self.schedule(run_id)
+        return recovered
+
+    async def ready(self) -> None:
+        """Verify that the configured durability boundary is reachable."""
+        await self._store.read("__relay_readiness__", from_seq=0)
 
     async def shutdown(self) -> None:
         for task in self._tasks.values():

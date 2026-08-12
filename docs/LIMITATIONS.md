@@ -3,7 +3,8 @@
 An honest inventory. Each item names the current shortcut, why it was acceptable here, and the production upgrade path.
 
 ## Runtime
-- **Single-node execution.** Runs are asyncio tasks in one process. *Correctness* under multiple processes already holds (optimistic concurrency), but there's no work distribution. Upgrade: lease + heartbeat columns on the runs projection; workers claim expired leases. Ledger schema unchanged.
+- **Single-node scheduling.** Runs are asyncio tasks in one process. Multiple processes cannot fork ledger state or duplicate a claimed tool side effect, but they can duplicate provider calls before one response append wins. Upgrade: lease + heartbeat columns on the runs projection; workers claim expired leases. Ledger schema unchanged.
+- **Recovery needs exclusive ownership.** Startup recovery can clear persisted execution claims only when the prior worker is guaranteed dead. It is disabled by default and enabled only in the single-process Docker Compose example; Kubernetes replacement does not prove exclusivity. Multi-worker recovery requires leases with expiry/fencing; merely scanning every `RUNNING` run is unsafe.
 - **Budget overshoot window.** Budgets are checked before each LLM call, so a run can exceed token/cost limits by at most one call. Upgrade: pre-call estimation (prompt tokens + max_output) against remaining budget.
 - **Sequential tool execution.** Multiple tool calls from one model turn run one at a time. Simpler recovery semantics; parallel execution of read-only tools is a safe optimization later.
 - **No mid-execution cancellation.** Cancel wins at the next append, but an in-flight tool/LLM call runs to completion first. Upgrade: cooperative cancellation tokens threaded into the executor.

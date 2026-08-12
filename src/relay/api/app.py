@@ -26,7 +26,7 @@ from relay.api.schemas import (
 )
 from relay.config import Settings, get_settings
 from relay.domain.run import RunStatus
-from relay.engine.loop import AgentEngine
+from relay.engine.loop import AgentEngine, RunNotFoundError
 from relay.engine.manager import RunManager
 from relay.memory.store import JsonlMemoryStore
 from relay.observability import get_logger, setup_logging, setup_tracing
@@ -92,9 +92,15 @@ def create_app(manager: RunManager | None = None) -> FastAPI:
         setup_tracing(service_name=settings.service_name, endpoint=settings.otel_endpoint)
         mgr = manager if manager is not None else await build_manager(settings)
         app.state.manager = mgr
-        recovered = await mgr.recover()
-        if recovered:
-            log.info("startup_recovery", extra={"ctx": {"recovered_runs": recovered}})
+        if settings.startup_recovery_exclusive:
+            recovered = await mgr.recover(exclusive=True)
+            if recovered:
+                log.info("startup_recovery", extra={"ctx": {"recovered_runs": recovered}})
+        else:
+            log.info(
+                "startup_recovery_disabled",
+                extra={"ctx": {"reason": "exclusive ownership not configured"}},
+            )
         yield
         await mgr.shutdown()
 
@@ -111,6 +117,18 @@ def create_app(manager: RunManager | None = None) -> FastAPI:
     @app.get("/healthz")
     async def healthz() -> dict:
         return {"status": "ok"}
+
+    @app.get("/readyz")
+    async def readyz() -> dict:
+        try:
+            await mgr().ready()
+        except Exception as e:  # noqa: BLE001 - readiness must translate dependency failures
+            log.error(
+                "readiness_check_failed",
+                extra={"ctx": {"error_type": type(e).__name__}},
+            )
+            raise HTTPException(503, "event store unavailable") from e
+        return {"status": "ready"}
 
     @app.get("/metrics", response_class=PlainTextResponse)
     async def metrics() -> str:
@@ -171,13 +189,18 @@ def create_app(manager: RunManager | None = None) -> FastAPI:
                 state = await mgr().engine.deny(
                     run_id, approval_id, approver=req.approver, note=req.note
                 )
+        except RunNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
         except ValueError as e:
             raise HTTPException(409, str(e)) from e
         return RunView.from_state(state)
 
     @app.post("/v1/runs/{run_id}/cancel", response_model=RunView)
     async def cancel_run(run_id: str) -> RunView:
-        state = await mgr().engine.cancel(run_id)
+        try:
+            state = await mgr().engine.cancel(run_id)
+        except RunNotFoundError as e:
+            raise HTTPException(404, str(e)) from e
         return RunView.from_state(state)
 
     @app.get("/v1/runs", response_model=list[str])

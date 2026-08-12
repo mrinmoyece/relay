@@ -3,10 +3,17 @@ is scripted. These assert *behavior*, not implementation."""
 
 from __future__ import annotations
 
+import asyncio
+
+from relay.config import Settings
 from relay.domain.budget import Budget
+from relay.domain.events import ToolExecutionStarted
 from relay.domain.run import RunStatus
 from relay.domain.types import ToolCallSpec
+from relay.engine.loop import AgentEngine
 from relay.llm.mock import MockLLMProvider, MockTurn, looping_tool_call
+from relay.tools.base import Tool
+from relay.tools.registry import ToolRegistry
 
 
 def call(cid: str, expr: str) -> ToolCallSpec:
@@ -124,6 +131,113 @@ async def test_non_retryable_provider_error_fails_run(make_engine):
     assert state.status == RunStatus.FAILED
     assert "provider_error" in state.error
     assert provider.calls == 1  # failed fast
+
+
+async def test_provider_timeout_is_bounded_and_recorded(store):
+    class HangingProvider:
+        async def complete(self, *, model, messages, tools):
+            await asyncio.sleep(10)
+
+    settings = Settings(
+        llm_timeout_seconds=0.01,
+        llm_max_attempts=2,
+        llm_retry_backoff_seconds=0,
+    )
+    engine = AgentEngine(
+        store=store,
+        provider=HangingProvider(),
+        registry=ToolRegistry(),
+        settings=settings,
+    )
+    run_id = await engine.create_run(goal="never return")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert "timed out" in state.error
+
+
+async def test_unexpected_provider_exception_becomes_recorded_failure(store):
+    class BuggyProvider:
+        async def complete(self, *, model, messages, tools):
+            raise TypeError("adapter implementation bug")
+
+    engine = AgentEngine(
+        store=store,
+        provider=BuggyProvider(),
+        registry=ToolRegistry(),
+    )
+    run_id = await engine.create_run(goal="contain provider bugs")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert state.error == "provider_error: unexpected provider error: TypeError"
+    assert [record.event.type for record in await store.read(run_id)][-1] == "run_failed"
+
+
+async def test_malformed_provider_return_becomes_recorded_failure(store):
+    class MalformedProvider:
+        async def complete(self, *, model, messages, tools):
+            return {}
+
+    engine = AgentEngine(
+        store=store,
+        provider=MalformedProvider(),
+        registry=ToolRegistry(),
+    )
+    run_id = await engine.create_run(goal="validate adapter output")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert state.error == "provider_error: unexpected provider error: TypeError"
+    assert [record.event.type for record in await store.read(run_id)][-1] == "run_failed"
+
+
+async def test_duplicate_provider_tool_call_ids_fail_without_pending_calls(make_engine, store):
+    duplicate_calls = (
+        ToolCallSpec(call_id="duplicate", tool_name="calculator", arguments={"expression": "1"}),
+        ToolCallSpec(call_id="duplicate", tool_name="calculator", arguments={"expression": "2"}),
+    )
+    engine = make_engine(MockLLMProvider(script=[MockTurn(tool_calls=duplicate_calls)]))
+    run_id = await engine.create_run(goal="reject malformed provider output")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert "duplicate tool call id" in state.error
+    assert state.pending_calls == ()
+    assert [record.event.type for record in await store.read(run_id)][-2:] == [
+        "llm_responded",
+        "run_failed",
+    ]
+
+
+async def test_persisted_execution_claim_fences_second_driver(store):
+    executions = 0
+
+    async def handler(arguments):
+        nonlocal executions
+        executions += 1
+        return "done"
+
+    tool = Tool(name="counted", description="", handler=handler)
+    registry = ToolRegistry([tool])
+    provider = MockLLMProvider(
+        script=[
+            MockTurn(
+                tool_calls=(
+                    ToolCallSpec(call_id="c1", tool_name="counted", arguments={}),
+                )
+            )
+        ]
+    )
+    engine = AgentEngine(store=store, provider=provider, registry=registry)
+    run_id = await engine.create_run(goal="claim")
+    state = await engine.get_state(run_id)
+    await engine._advance_with_model(state)  # noqa: SLF001
+    state = await engine.get_state(run_id)
+    await engine._append(  # noqa: SLF001
+        state,
+        [ToolExecutionStarted(call_id="c1", tool_name="counted")],
+    )
+
+    parked = await engine.drive(run_id)
+    assert parked.pending_calls[0].execution_started
+    assert executions == 0
 
 
 async def test_completed_run_writes_long_term_memory(make_engine, memory):

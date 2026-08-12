@@ -108,6 +108,19 @@ class ToolCallRequested(_Event):
     risk: RiskLevel
 
 
+class ToolExecutionStarted(_Event):
+    """The runtime won the execution claim for a requested tool call.
+
+    Persisted immediately before invoking the handler. Optimistic concurrency
+    makes this event a fencing token: only the writer that appends it may
+    perform the side effect.
+    """
+
+    type: Literal["tool_execution_started"] = "tool_execution_started"
+    call_id: str
+    tool_name: str
+
+
 class ToolSucceeded(_Event):
     type: Literal["tool_succeeded"] = "tool_succeeded"
     call_id: str
@@ -177,6 +190,7 @@ AnyEvent = Annotated[
     | BudgetExceeded
     | LLMResponded
     | ToolCallRequested
+    | ToolExecutionStarted
     | ToolSucceeded
     | ToolFailed
     | ApprovalRequired

@@ -21,10 +21,13 @@ exact same decision point.
 
 from __future__ import annotations
 
+import asyncio
 import uuid
+from collections.abc import Iterable
+from typing import Any
 
 from relay.config import Settings
-from relay.domain.budget import check_budget
+from relay.domain.budget import Budget, check_budget
 from relay.domain.events import (
     AnyEvent,
     ApprovalDenied,
@@ -38,6 +41,7 @@ from relay.domain.events import (
     RunCreated,
     RunFailed,
     ToolCallRequested,
+    ToolExecutionStarted,
     ToolFailed,
     ToolSucceeded,
     utcnow,
@@ -45,7 +49,7 @@ from relay.domain.events import (
 from relay.domain.run import RunState, RunStatus, apply, replay
 from relay.domain.types import RiskLevel
 from relay.engine.executor import ToolExecutor
-from relay.llm.base import LLMProvider, ProviderError
+from relay.llm.base import LLMProvider, ModelTurn, ProviderError
 from relay.memory.store import MemoryEntry, MemoryStore, render_memory_block
 from relay.observability import get_logger, span
 from relay.observability.metrics import record_event
@@ -87,9 +91,9 @@ class AgentEngine:
         goal: str,
         model: str | None = None,
         system_prompt: str = "",
-        budget=None,
+        budget: Budget | None = None,
         allowed_tools: tuple[str, ...] = (),
-        metadata: dict | None = None,
+        metadata: dict[str, Any] | None = None,
         run_id: str | None = None,
     ) -> str:
         """Persist RunCreated (with memory injection) and return run_id.
@@ -102,8 +106,6 @@ class AgentEngine:
             # baked into the RunCreated event itself.
             entries = await self._memory.search(goal, limit=3)
             prompt = system_prompt + render_memory_block(entries)
-
-        from relay.domain.budget import Budget
 
         event = RunCreated(
             goal=goal,
@@ -127,7 +129,8 @@ class AgentEngine:
 
             try:
                 if state.pending_calls:
-                    await self._process_next_call(state)
+                    if not await self._process_next_call(state):
+                        return state
                 else:
                     await self._advance_with_model(state)
             except ConcurrencyError:
@@ -174,6 +177,8 @@ class AgentEngine:
 
     async def cancel(self, run_id: str, *, reason: str = "user_requested") -> RunState:
         state = await self._load(run_id)
+        if state.last_seq == 0:
+            raise RunNotFoundError(run_id)
         if state.status.is_terminal:
             return state
         await self._append(state, [RunCancelled(reason=reason)])
@@ -186,9 +191,13 @@ class AgentEngine:
     # Loop internals
     # ------------------------------------------------------------------
 
-    async def _process_next_call(self, state: RunState) -> None:
+    async def _process_next_call(self, state: RunState) -> bool:
         pc = state.pending_calls[0]
         call = pc.call
+        if pc.execution_started:
+            # Another worker owns the persisted execution claim. Returning
+            # avoids duplicate side effects while that worker is in flight.
+            return False
         registry = self._registry.scoped(state.allowed_tools)
 
         try:
@@ -201,10 +210,11 @@ class AgentEngine:
                         call_id=call.call_id,
                         tool_name=call.tool_name,
                         error=f"unknown or not-permitted tool: {call.tool_name!r}",
+                        attempts=0,
                     )
                 ],
             )
-            return
+            return True
 
         decision = (
             PolicyDecision.ALLOW if pc.approved else self._policy.decide(tool)
@@ -218,10 +228,11 @@ class AgentEngine:
                         call_id=call.call_id,
                         tool_name=call.tool_name,
                         error=f"denied by policy (risk={tool.risk.value})",
+                        attempts=0,
                     )
                 ],
             )
-            return
+            return True
 
         if decision == PolicyDecision.REQUIRE_APPROVAL:
             await self._append(
@@ -236,8 +247,12 @@ class AgentEngine:
                     )
                 ],
             )
-            return
+            return True
 
+        claimed_state = await self._append(
+            state,
+            [ToolExecutionStarted(call_id=call.call_id, tool_name=tool.name)],
+        )
         with span("tool.call", run_id=state.run_id, tool=tool.name):
             result = await self._executor.execute(tool, call.arguments)
         if result.ok:
@@ -255,7 +270,8 @@ class AgentEngine:
                 error=result.output,
                 attempts=result.attempts,
             )
-        await self._append(state, [event])
+        await self._append(claimed_state, [event])
+        return True
 
     async def _advance_with_model(self, state: RunState) -> None:
         violation = check_budget(
@@ -283,27 +299,53 @@ class AgentEngine:
         for attempt in range(1, self._settings.llm_max_attempts + 1):
             try:
                 with span("llm.call", run_id=state.run_id, model=state.model, attempt=attempt):
-                    turn = await self._provider.complete(
-                        model=state.model,
-                        messages=state.transcript,
-                        tools=registry.tool_defs(),
+                    candidate = await asyncio.wait_for(
+                        self._provider.complete(
+                            model=state.model,
+                            messages=state.transcript,
+                            tools=registry.tool_defs(),
+                        ),
+                        timeout=self._settings.llm_timeout_seconds,
                     )
+                    if not isinstance(candidate, ModelTurn):
+                        raise TypeError(
+                            "provider returned "
+                            f"{type(candidate).__name__}, expected ModelTurn"
+                        )
+                    turn = candidate
                 break
+            except asyncio.TimeoutError:
+                last_error = ProviderError(
+                    f"provider timed out after {self._settings.llm_timeout_seconds}s",
+                    retryable=True,
+                )
             except ProviderError as e:
                 last_error = e
+            except Exception as e:  # noqa: BLE001 - provider code is an adapter boundary
+                last_error = ProviderError(
+                    f"unexpected provider error: {type(e).__name__}",
+                    retryable=False,
+                )
+            if last_error is not None:
                 log.warning(
                     "llm_attempt_failed",
                     extra={
                         "ctx": {
                             "run_id": state.run_id,
                             "attempt": attempt,
-                            "retryable": e.retryable,
-                            "error": str(e)[:500],
+                            "retryable": last_error.retryable,
+                            "error": str(last_error)[:500],
                         }
                     },
                 )
-                if not e.retryable:
+                if not last_error.retryable:
                     break
+                if attempt < self._settings.llm_max_attempts:
+                    delay = min(
+                        self._settings.llm_retry_backoff_seconds * (2 ** (attempt - 1)),
+                        30.0,
+                    )
+                    await asyncio.sleep(delay)
 
         if turn is None:
             await self._append(
@@ -313,15 +355,28 @@ class AgentEngine:
             return
 
         step = state.step + 1
-        events: list[AnyEvent] = [
-            LLMResponded(
-                step=step,
-                content=turn.content,
-                tool_calls=turn.tool_calls,
-                usage=turn.usage,
-                stop_reason=turn.stop_reason,
+        response = LLMResponded(
+            step=step,
+            content=turn.content,
+            tool_calls=turn.tool_calls,
+            usage=turn.usage,
+            stop_reason=turn.stop_reason,
+        )
+        duplicate_call_id = _first_duplicate(call.call_id for call in turn.tool_calls)
+        if duplicate_call_id is not None:
+            await self._append(
+                state,
+                [
+                    response,
+                    RunFailed(
+                        reason="invalid_provider_response",
+                        detail=f"duplicate tool call id {duplicate_call_id!r}",
+                    ),
+                ],
             )
-        ]
+            return
+
+        events: list[AnyEvent] = [response]
         if turn.tool_calls:
             for call in turn.tool_calls:
                 risk = (
@@ -374,6 +429,8 @@ class AgentEngine:
 
     @staticmethod
     def _require_pending_approval(state: RunState, approval_id: str):
+        if state.last_seq == 0:
+            raise RunNotFoundError(state.run_id)
         pa = state.pending_approval
         if state.status != RunStatus.AWAITING_APPROVAL or pa is None:
             raise ValueError(f"run {state.run_id} is not awaiting approval")
@@ -411,3 +468,18 @@ class AgentEngine:
 
 def get_tool(registry: ToolRegistry, name: str) -> Tool:
     return registry.get(name)
+
+
+def _first_duplicate(values: Iterable[str]) -> str | None:
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            return value
+        seen.add(value)
+    return None
+
+
+class RunNotFoundError(ValueError):
+    def __init__(self, run_id: str) -> None:
+        super().__init__(f"run {run_id} not found")
+        self.run_id = run_id

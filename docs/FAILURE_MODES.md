@@ -3,7 +3,7 @@
 What breaks, what Relay does about it, and what the residual blast radius is. Ordered roughly by how often each happens in production.
 
 ## 1. Provider errors (rate limits, 5xx, timeouts, auth)
-**Behavior:** adapter classifies via `ProviderError.retryable`. Retryable → up to `llm_max_attempts` with backoff; non-retryable (auth, invalid request) → fail fast. Exhausted/permanent → `RunFailed(reason="provider_error")` in the ledger with the error detail.
+**Behavior:** the engine imposes `llm_timeout_seconds` around every provider call. The adapter classifies other failures via `ProviderError.retryable`. Retryable → up to `llm_max_attempts` with bounded exponential backoff; non-retryable (auth, invalid request) → fail fast. Exhausted/permanent → `RunFailed(reason="provider_error")` in the ledger with the error detail.
 **Residual risk:** a long provider outage fails runs rather than queueing them. Deliberate: silently parking runs on outage hides the incident. (A retry-later queue is a straightforward extension — resubmit failed runs.)
 **Tested by:** `test_retryable_provider_error_is_retried`, `test_non_retryable_provider_error_fails_run`.
 
@@ -13,7 +13,7 @@ What breaks, what Relay does about it, and what the residual blast radius is. Or
 **Tested by:** `test_timeout_is_enforced_and_retried`, `test_unexpected_exception_never_escapes`, `test_tool_error_is_surfaced_and_model_recovers`.
 
 ## 3. Worker crash mid-run
-**Behavior:** all progress up to the last append is durable. Recovery scans `RUNNING` runs, appends `RunResumed`, and continues. In-flight tool call ambiguity resolved by idempotency contract: re-execute idempotent, escalate non-idempotent to a human.
+**Behavior:** all progress up to the last append is durable. In an exclusive single-worker deployment, recovery scans `RUNNING` runs, appends `RunResumed`, and continues. `ToolExecutionStarted` distinguishes requested work from claimed work. A claim without a result is still ambiguous after a crash: re-execute idempotent tools, escalate non-idempotent tools to a human. Startup recovery is disabled unless exclusive ownership is explicitly configured.
 **Residual risk:** the money/email window — a crash *after* a non-idempotent side effect but *before* its result event means a human must investigate external state to answer "did it happen?". No system can close this window; Relay makes it visible instead of pretending.
 **Tested by:** `test_crash_with_idempotent_call_resumes_automatically`, `test_crash_with_non_idempotent_call_escalates_to_human`.
 
@@ -23,9 +23,9 @@ What breaks, what Relay does about it, and what the residual blast radius is. Or
 **Tested by:** `test_step_budget_halts_a_looping_agent`, eval `runaway_loop_is_halted`.
 
 ## 5. Concurrent writers (double-drive, race with cancel/approval)
-**Behavior:** optimistic concurrency — the stale writer gets `ConcurrencyError`, re-reads the ledger, and defers. Cancel racing a tool execution: the cancel event wins the append; the driver's subsequent append fails; the tool's side effect may still have occurred (same ambiguity as #3, same visibility).
-**Residual risk:** wasted duplicate work (not incorrect state) if two processes drive one run; the lease layer described in ADR-0003 removes the waste at fleet scale.
-**Tested by:** `test_optimistic_concurrency_rejects_stale_writer`.
+**Behavior:** optimistic concurrency fences every append. Tools additionally require a persisted `ToolExecutionStarted` claim, so racing workers cannot both enter the same handler. Cancel racing an already claimed tool can still win the result append; the side effect may have occurred and the claim remains as evidence.
+**Residual risk:** workers can duplicate provider calls before one wins the `LLMResponded` append, causing bounded wasted spend. The lease layer in ADR-0003 removes that fleet-scale inefficiency.
+**Tested by:** `test_optimistic_concurrency_rejects_stale_writer`, `test_persisted_execution_claim_fences_second_driver`, and the eval-wide claim-before-success invariant.
 
 ## 6. Prompt injection steering the agent
 **Behavior:** contained structurally, not linguistically: per-run tool allowlists (hallucinated/injected tools can't execute), deny-by-default policy, human gates on destructive actions, budget caps on waste. Eval `tool_allowlist_enforced` asserts the security invariant "non-allowlisted tools never succeed" on every scenario.

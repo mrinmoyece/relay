@@ -1,9 +1,10 @@
 """Crash recovery.
 
-At startup (or on a schedule) the recovery scanner finds every run whose
-projection says RUNNING - i.e. a worker died mid-run - and resumes it.
+Under an exclusive-deployment guarantee, the recovery scanner finds every run
+whose projection says RUNNING and resumes it. Without a lease, callers must
+prove the prior worker is dead; scanning from an overlapping process is unsafe.
 
-The subtle case is a ToolCallRequested with no result event. The crash may
+The subtle case is ToolExecutionStarted with no result event. The crash may
 have happened before, during, or after the tool's side effect: the ledger
 cannot know. Relay resolves the ambiguity by tool contract:
 
@@ -31,9 +32,18 @@ log = get_logger(__name__)
 
 
 async def recover_interrupted_runs(
-    *, store: EventStore, engine: AgentEngine, registry: ToolRegistry
+    *,
+    store: EventStore,
+    engine: AgentEngine,
+    registry: ToolRegistry,
+    exclusive: bool,
 ) -> list[str]:
-    """Find RUNNING runs, resume each. Returns the recovered run ids."""
+    """Resume RUNNING runs only after exclusive ownership is guaranteed."""
+    if not exclusive:
+        raise RuntimeError(
+            "recovery requires exclusive deployment ownership; a prior worker "
+            "may still be executing a claimed side effect"
+        )
     interrupted = await store.list_runs(status=RunStatus.RUNNING.value)
     recovered: list[str] = []
     for run_id in interrupted:
@@ -54,22 +64,28 @@ async def _recover_one(
 
     events: list = [RunResumed(recovered_after_seq=state.last_seq)]
 
-    # Ambiguous in-flight call? Escalate non-idempotent ones to a human.
+    # A persisted execution claim without a result is ambiguous. A request
+    # that was never claimed is safe for the normal loop to process.
     if state.pending_calls:
+        if any(pc.execution_started for pc in state.pending_calls[1:]):
+            raise RuntimeError(
+                f"run {run_id}: multiple/out-of-order execution claims violate "
+                "sequential tool processing"
+            )
         pc = state.pending_calls[0]
         try:
             tool = registry.scoped(state.allowed_tools).get(pc.call.tool_name)
             idempotent = tool.idempotent
         except UnknownToolError:
             idempotent = False
-        if not idempotent:
+        if pc.execution_started and not idempotent:
             events.append(
                 ApprovalRequired(
                     approval_id=uuid.uuid4().hex,
                     call=pc.call,
                     risk=pc.risk,
                     reason=(
-                        "crash recovery: this non-idempotent call was requested "
+                        "crash recovery: this non-idempotent call was claimed "
                         "before the crash and may or may not have executed. "
                         "Approve to run it (again), deny to skip it."
                     ),
@@ -81,4 +97,3 @@ async def _recover_one(
         "run_recovered",
         extra={"ctx": {"run_id": run_id, "escalated": len(events) > 1}},
     )
-    await engine.drive(run_id)

@@ -1,12 +1,12 @@
 # Relay on Kubernetes.
 #
 # Deployment notes specific to Relay's design:
-# - replicas: 1 deliberately. Correctness under multiple replicas is already
-#   guaranteed (optimistic concurrency: a second writer loses cleanly), but
-#   without the lease/claim layer (ADR-0003, LIMITATIONS.md) extra replicas
-#   waste work by racing on the same runs. Scale out only after adding leases.
-# - Rolling deploys are safe mid-run: durable event log + startup crash
-#   recovery mean the new pod resumes whatever the old pod was doing.
+# - replicas: 1 deliberately. Event versions and persisted execution claims
+#   prevent ledger forks and duplicate tool effects, but without worker leases
+#   extra replicas can duplicate provider calls and spend. Scale out only after
+#   adding the lease/heartbeat layer in ADR-0003.
+# - Startup recovery stays disabled: Recreate does not fence replacement pods
+#   during eviction or node partitions. Add worker leases before enabling it.
 # - Secrets come from a Secret object; config from env (12-factor).
 apiVersion: apps/v1
 kind: Deployment
@@ -62,7 +62,7 @@ spec:
               memory: 512Mi
           readinessProbe:
             httpGet:
-              path: /healthz
+              path: /readyz
               port: 8000
             initialDelaySeconds: 3
             periodSeconds: 10

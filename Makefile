@@ -1,7 +1,9 @@
+PYTHON ?= python3
+
 .PHONY: install dev test lint evals demo run up down
 
 install:
-	pip install -e ".[dev]"
+	$(PYTHON) -m pip install -e ".[dev]"
 
 test:
 	pytest -v
@@ -10,13 +12,13 @@ lint:
 	ruff check src tests evals
 
 evals:
-	python -m evals.run_evals
+	$(PYTHON) -m evals.run_evals
 
 demo:
-	python scripts/demo.py
+	$(PYTHON) scripts/demo.py
 
 run:
-	uvicorn relay.api.app:app --reload
+	$(PYTHON) -m uvicorn relay.api.app:app --reload
 
 up:
 	docker compose up --build

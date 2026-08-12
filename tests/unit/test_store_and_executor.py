@@ -10,6 +10,7 @@ from relay.engine.executor import ToolExecutor
 from relay.store.base import ConcurrencyError
 from relay.store.memory import InMemoryEventStore
 from relay.tools.base import Tool, ToolExecutionError
+from relay.tools.builtin import calculator, make_write_file
 
 # ------------------------------------------------------------- event store
 
@@ -122,3 +123,34 @@ async def test_unexpected_exception_never_escapes():
     result = await make_executor().execute(tool, {})
     assert not result.ok
     assert "ZeroDivisionError" in result.output
+
+
+@pytest.mark.parametrize(
+    "expression",
+    [
+        "9**9**9",
+        "1/0",
+        "+".join(["1"] * 150),
+        "1e309",
+        "1e309-1e309",
+        "9" * 500,
+    ],
+)
+async def test_calculator_rejects_resource_exhaustion_and_invalid_arithmetic(expression):
+    result = await make_executor().execute(
+        calculator,
+        {"expression": expression},
+    )
+    assert not result.ok
+    assert result.attempts == 1
+
+
+async def test_write_file_rejects_oversized_content_without_touching_target(tmp_path):
+    target = tmp_path / "oversized.txt"
+    result = await make_executor().execute(
+        make_write_file(tmp_path),
+        {"path": target.name, "content": "x" * 1_000_001},
+    )
+    assert not result.ok
+    assert "character limit" in result.output
+    assert not target.exists()

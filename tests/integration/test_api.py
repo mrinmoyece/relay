@@ -132,9 +132,32 @@ async def test_unknown_run_is_404_and_cancel_works():
     async with client:
         async with app.router.lifespan_context(app):
             assert (await client.get("/v1/runs/nope")).status_code == 404
+            assert (await client.post("/v1/runs/nope/cancel")).status_code == 404
+            assert (
+                await client.post(
+                    "/v1/runs/nope/approvals/nope",
+                    json={"decision": "approve", "approver": "operator"},
+                )
+            ).status_code == 404
+            assert (await client.get("/readyz")).status_code == 200
 
             run_id = (await client.post("/v1/runs", json={"goal": "g"})).json()["run_id"]
             await wait_for_terminal(client, run_id)
             resp = await client.post(f"/v1/runs/{run_id}/cancel")
             # already completed -> cancel is a no-op returning current state
             assert resp.json()["status"] == "completed"
+
+
+async def test_readiness_returns_503_when_event_store_is_unavailable():
+    class FailingReadStore(InMemoryEventStore):
+        async def read(self, run_id: str, *, from_seq: int = 0):
+            raise RuntimeError("database unavailable")
+
+    manager = build_manager([])
+    manager._store = FailingReadStore()  # noqa: SLF001 - inject dependency failure
+    client, app = await client_for(manager)
+    async with client:
+        async with app.router.lifespan_context(app):
+            resp = await client.get("/readyz")
+            assert resp.status_code == 503
+            assert resp.json() == {"detail": "event store unavailable"}
