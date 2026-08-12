@@ -97,4 +97,3 @@ async def _recover_one(
         "run_recovered",
         extra={"ctx": {"run_id": run_id, "escalated": len(events) > 1}},
     )
-    await engine.drive(run_id)

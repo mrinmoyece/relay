@@ -172,6 +172,23 @@ async def test_unexpected_provider_exception_becomes_recorded_failure(store):
     assert [record.event.type for record in await store.read(run_id)][-1] == "run_failed"
 
 
+async def test_malformed_provider_return_becomes_recorded_failure(store):
+    class MalformedProvider:
+        async def complete(self, *, model, messages, tools):
+            return {}
+
+    engine = AgentEngine(
+        store=store,
+        provider=MalformedProvider(),
+        registry=ToolRegistry(),
+    )
+    run_id = await engine.create_run(goal="validate adapter output")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert state.error == "provider_error: unexpected provider error: TypeError"
+    assert [record.event.type for record in await store.read(run_id)][-1] == "run_failed"
+
+
 async def test_duplicate_provider_tool_call_ids_fail_without_pending_calls(make_engine, store):
     duplicate_calls = (
         ToolCallSpec(call_id="duplicate", tool_name="calculator", arguments={"expression": "1"}),

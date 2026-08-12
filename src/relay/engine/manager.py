@@ -50,13 +50,16 @@ class RunManager:
         self._tasks[run_id] = task
 
     async def recover(self, *, exclusive: bool) -> list[str]:
-        """Resume interrupted runs when no prior worker can still be alive."""
-        return await recover_interrupted_runs(
+        """Reconcile claims, then resume runs as tracked background tasks."""
+        recovered = await recover_interrupted_runs(
             store=self._store,
             engine=self._engine,
             registry=self._registry,
             exclusive=exclusive,
         )
+        for run_id in recovered:
+            self.schedule(run_id)
+        return recovered
 
     async def ready(self) -> None:
         """Verify that the configured durability boundary is reachable."""

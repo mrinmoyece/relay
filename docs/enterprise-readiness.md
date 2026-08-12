@@ -15,7 +15,7 @@ below.
 | Safety | Tool allowlists, risk policy, approval, budgets, input/output caps | Strong runtime baseline |
 | Availability | Bounded provider/tool calls, liveness/readiness, graceful task shutdown | Single-node |
 | Observability | Structured logs, OTel spans, ledger-derived metrics | Baseline; no latency histograms/SLOs |
-| Verification | 69 tests, six deterministic behavioral scenarios, CI matrix | Strong runtime regression coverage |
+| Verification | 71 tests, six deterministic behavioral scenarios, CI matrix | Strong runtime regression coverage |
 | Supply chain | Non-root image, CodeQL, Dependabot, read-only CI token defaults | Baseline |
 | Identity | Approver string recorded from request | Not production-ready |
 | Tenant isolation | None | Not implemented |

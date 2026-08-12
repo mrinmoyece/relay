@@ -5,7 +5,7 @@
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen)]() [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]() [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
 ```
-69 unit + integration tests · 6/6 behavioral evals (CI-gated) · runs with zero config, no API key
+71 unit + integration tests · 6/6 behavioral evals (CI-gated) · runs with zero config, no API key
 ```
 
 ## The problem
@@ -107,7 +107,7 @@ stateDiagram-v2
 # zero-config: in-memory store + deterministic mock model, no secrets
 pip install -e ".[dev]"
 make demo     # watch 4 stories: tools, HITL approval, crash recovery, memory
-make test     # 69 tests
+make test     # 71 tests
 make evals    # 6 behavioral scenarios (same suite gates CI)
 
 # full durable stack: Postgres + API (+ optional Jaeger tracing)
@@ -147,7 +147,7 @@ src/relay/
 ├── memory/        long-term memory store + retrieval
 ├── observability/ OTel tracing (no-op fallback), structured JSON logging
 └── api/           FastAPI: create/inspect/approve/cancel/replay runs
-tests/             69 unit + integration tests
+tests/             71 unit + integration tests
 evals/             behavioral scenario suite (gates CI)
 docs/              architecture, 6 ADRs, failure modes, runbook, limitations
 ```

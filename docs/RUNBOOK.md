@@ -11,8 +11,9 @@ Config via environment (see `.env.example`). Key envs: `RELAY_DATABASE_URL` (uns
 Startup recovery is disabled by default because a new process cannot infer that
 an older worker holding an execution claim is dead. Enable
 `RELAY_STARTUP_RECOVERY_EXCLUSIVE=true` only when deployment guarantees no
-overlap, such as the supplied Kubernetes `replicas: 1` + `Recreate` strategy or
-the single-API Docker Compose stack. With that guarantee, startup applies the
+overlap, such as the single-API Docker Compose stack. Kubernetes pod replacement
+does not provide this guarantee even with `replicas: 1` + `Recreate`, so the
+supplied manifest leaves recovery disabled. With a valid guarantee, startup applies the
 schema, scans interrupted runs, logs `startup_recovery`, and serves. Without it,
 startup logs `startup_recovery_disabled`; use worker leases before running
 multiple replicas.

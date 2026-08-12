@@ -156,7 +156,7 @@ async def story_3_crash_recovery() -> None:
     recovered = await recover_interrupted_runs(
         store=store, engine=engine_b, registry=registry, exclusive=True
     )
-    state = await engine_b.get_state(run_id)
+    state = await engine_b.drive(run_id)
     print(f"  recovered runs: {[r[:8] for r in recovered]}")
     print(f"  final: status={state.status.value} answer={state.final_answer!r}")
     print("  (calculator is idempotent -> re-executed automatically;")

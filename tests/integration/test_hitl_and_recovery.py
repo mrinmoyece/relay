@@ -3,11 +3,14 @@ work because state is an event log."""
 
 from __future__ import annotations
 
+import asyncio
+
 import pytest
 
 from relay.domain.events import ToolExecutionStarted
 from relay.domain.run import RunStatus
 from relay.domain.types import ToolCallSpec
+from relay.engine.manager import RunManager
 from relay.engine.recovery import recover_interrupted_runs
 from relay.llm.mock import MockLLMProvider, MockTurn
 
@@ -95,7 +98,7 @@ async def test_crash_with_idempotent_call_resumes_automatically(make_engine, sto
         store=store, engine=engine_b, registry=registry, exclusive=True
     )
     assert recovered == [run_id]
-    state = await engine_b.get_state(run_id)
+    state = await engine_b.drive(run_id)
     assert state.status == RunStatus.COMPLETED
     assert state.final_answer == "42"
     # ledger records the resume
@@ -121,7 +124,7 @@ async def test_recovery_reclaims_a_persisted_idempotent_execution_claim(
     assert await recover_interrupted_runs(
         store=store, engine=engine_b, registry=registry, exclusive=True
     ) == [run_id]
-    state = await engine_b.get_state(run_id)
+    state = await engine_b.drive(run_id)
     assert state.status == RunStatus.COMPLETED
     assert state.final_answer == "42"
 
@@ -181,3 +184,26 @@ async def test_recovery_rejects_nonexclusive_startup(make_engine, store, registr
             registry=registry,
             exclusive=False,
         )
+
+
+async def test_manager_schedules_recovered_runs_without_waiting_for_drive(
+    make_engine, store, registry
+):
+    calc = ToolCallSpec(call_id="c1", tool_name="calculator", arguments={"expression": "6*7"})
+    engine_a = make_engine(MockLLMProvider(script=[MockTurn(tool_calls=(calc,))]))
+    run_id = await engine_a.create_run(goal="recover in background")
+    await engine_a._advance_with_model(await engine_a.get_state(run_id))  # noqa: SLF001
+
+    class HangingProvider:
+        async def complete(self, *, model, messages, tools):
+            await asyncio.sleep(10)
+
+    engine_b = make_engine(HangingProvider())
+    manager = RunManager(engine=engine_b, store=store, registry=registry)
+    recovered = await manager.recover(exclusive=True)
+    try:
+        assert recovered == [run_id]
+        assert run_id in manager._tasks  # noqa: SLF001 - verify background ownership
+        assert "run_resumed" in [record.event.type for record in await store.read(run_id)]
+    finally:
+        await manager.shutdown()

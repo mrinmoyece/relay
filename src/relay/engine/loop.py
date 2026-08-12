@@ -49,7 +49,7 @@ from relay.domain.events import (
 from relay.domain.run import RunState, RunStatus, apply, replay
 from relay.domain.types import RiskLevel
 from relay.engine.executor import ToolExecutor
-from relay.llm.base import LLMProvider, ProviderError
+from relay.llm.base import LLMProvider, ModelTurn, ProviderError
 from relay.memory.store import MemoryEntry, MemoryStore, render_memory_block
 from relay.observability import get_logger, span
 from relay.observability.metrics import record_event
@@ -299,7 +299,7 @@ class AgentEngine:
         for attempt in range(1, self._settings.llm_max_attempts + 1):
             try:
                 with span("llm.call", run_id=state.run_id, model=state.model, attempt=attempt):
-                    turn = await asyncio.wait_for(
+                    candidate = await asyncio.wait_for(
                         self._provider.complete(
                             model=state.model,
                             messages=state.transcript,
@@ -307,6 +307,12 @@ class AgentEngine:
                         ),
                         timeout=self._settings.llm_timeout_seconds,
                     )
+                    if not isinstance(candidate, ModelTurn):
+                        raise TypeError(
+                            "provider returned "
+                            f"{type(candidate).__name__}, expected ModelTurn"
+                        )
+                    turn = candidate
                 break
             except asyncio.TimeoutError:
                 last_error = ProviderError(
