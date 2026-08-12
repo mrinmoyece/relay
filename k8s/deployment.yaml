@@ -5,8 +5,8 @@
 #   prevent ledger forks and duplicate tool effects, but without worker leases
 #   extra replicas can duplicate provider calls and spend. Scale out only after
 #   adding the lease/heartbeat layer in ADR-0003.
-# - Rolling deploys are safe mid-run: durable event log + startup crash
-#   recovery mean the new pod resumes whatever the old pod was doing.
+# - Recreate fully terminates the old pod before startup crash recovery clears
+#   claims and resumes work; do not change strategy while recovery is enabled.
 # - Secrets come from a Secret object; config from env (12-factor).
 apiVersion: apps/v1
 kind: Deployment
@@ -53,6 +53,9 @@ spec:
                   key: anthropic-api-key
             - name: RELAY_OTEL_ENDPOINT
               value: ""   # e.g. http://otel-collector:4318/v1/traces
+            # Safe because replicas=1 + Recreate prevents overlapping workers.
+            - name: RELAY_STARTUP_RECOVERY_EXCLUSIVE
+              value: "true"
           resources:
             requests:
               cpu: 100m

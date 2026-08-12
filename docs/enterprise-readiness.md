@@ -15,7 +15,7 @@ below.
 | Safety | Tool allowlists, risk policy, approval, budgets, input/output caps | Strong runtime baseline |
 | Availability | Bounded provider/tool calls, liveness/readiness, graceful task shutdown | Single-node |
 | Observability | Structured logs, OTel spans, ledger-derived metrics | Baseline; no latency histograms/SLOs |
-| Verification | 66 tests, six deterministic behavioral scenarios, CI matrix | Strong runtime regression coverage |
+| Verification | 69 tests, six deterministic behavioral scenarios, CI matrix | Strong runtime regression coverage |
 | Supply chain | Non-root image, CodeQL, Dependabot, read-only CI token defaults | Baseline |
 | Identity | Approver string recorded from request | Not production-ready |
 | Tenant isolation | None | Not implemented |
@@ -40,6 +40,7 @@ Do not expose Relay to untrusted users until all applicable gates are satisfied:
    resource quotas, no ambient credentials, and explicit network policy.
 7. Add worker leases before horizontal scaling. Tool side effects are fenced,
    but duplicate provider calls can still consume budget across racing workers.
+   Do not enable exclusive startup recovery in an overlapping deployment.
 8. Define SLOs and alerts for provider latency/errors, run failures, stale
    approvals, recovery failures, budget trips, and database saturation.
 9. Pin and scan deployable artifacts, produce an SBOM, sign images, and enforce

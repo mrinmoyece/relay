@@ -35,6 +35,7 @@ class Settings(BaseSettings):
     llm_timeout_seconds: float = Field(default=120.0, gt=0)
     llm_max_attempts: int = Field(default=3, ge=1, le=10)
     llm_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=60)
+    startup_recovery_exclusive: bool = False
 
     @property
     def durable(self) -> bool:

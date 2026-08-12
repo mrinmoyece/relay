@@ -87,6 +87,15 @@ def test_legacy_tool_result_without_execution_claim_still_replays():
     assert state.transcript[-1].content == "2"
 
 
+def test_legacy_duplicate_pending_call_ids_still_replay():
+    call = ToolCallSpec(call_id="duplicate", tool_name="calculator", arguments={})
+    state = apply(RunState(run_id=RUN), rec(1, created()))
+    state = apply(state, rec(2, LLMResponded(step=1, tool_calls=(call, call))))
+    state = apply(state, rec(3, ToolCallRequested(step=1, call=call, risk=RiskLevel.READ_ONLY)))
+    state = apply(state, rec(4, ToolCallRequested(step=1, call=call, risk=RiskLevel.READ_ONLY)))
+    assert len(state.pending_calls) == 2
+
+
 def test_approval_flow_parks_and_resumes():
     call = ToolCallSpec(call_id="c1", tool_name="send_email", arguments={})
     state = apply(RunState(run_id=RUN), rec(1, created()))

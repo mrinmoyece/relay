@@ -154,7 +154,7 @@ async def story_3_crash_recovery() -> None:
     provider_b = MockLLMProvider(script=[MockTurn(content="6*7 = 42.")])
     engine_b, registry = make_engine(store, provider_b)
     recovered = await recover_interrupted_runs(
-        store=store, engine=engine_b, registry=registry
+        store=store, engine=engine_b, registry=registry, exclusive=True
     )
     state = await engine_b.get_state(run_id)
     print(f"  recovered runs: {[r[:8] for r in recovered]}")

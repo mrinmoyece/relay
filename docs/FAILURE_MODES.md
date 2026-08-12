@@ -13,7 +13,7 @@ What breaks, what Relay does about it, and what the residual blast radius is. Or
 **Tested by:** `test_timeout_is_enforced_and_retried`, `test_unexpected_exception_never_escapes`, `test_tool_error_is_surfaced_and_model_recovers`.
 
 ## 3. Worker crash mid-run
-**Behavior:** all progress up to the last append is durable. Recovery scans `RUNNING` runs, appends `RunResumed`, and continues. `ToolExecutionStarted` distinguishes requested work from claimed work. A claim without a result is still ambiguous after a crash: re-execute idempotent tools, escalate non-idempotent tools to a human.
+**Behavior:** all progress up to the last append is durable. In an exclusive single-worker deployment, recovery scans `RUNNING` runs, appends `RunResumed`, and continues. `ToolExecutionStarted` distinguishes requested work from claimed work. A claim without a result is still ambiguous after a crash: re-execute idempotent tools, escalate non-idempotent tools to a human. Startup recovery is disabled unless exclusive ownership is explicitly configured.
 **Residual risk:** the money/email window — a crash *after* a non-idempotent side effect but *before* its result event means a human must investigate external state to answer "did it happen?". No system can close this window; Relay makes it visible instead of pretending.
 **Tested by:** `test_crash_with_idempotent_call_resumes_automatically`, `test_crash_with_non_idempotent_call_escalates_to_human`.
 

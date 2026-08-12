@@ -92,12 +92,16 @@ async def run_scenario(sc: Scenario) -> list[str]:
     records = await store.read(run_id)
     claimed: set[str] = set()
     for record in records:
-        if record.event.type == "tool_execution_started":
+        if record.event.type == "run_resumed":
+            claimed.clear()
+        elif record.event.type == "tool_execution_started":
             claimed.add(record.event.call_id)
         elif record.event.type == "tool_succeeded" and record.event.call_id not in claimed:
             failures.append(
                 f"CONCURRENCY: tool {record.event.call_id!r} succeeded without a claim"
             )
+        elif record.event.type == "tool_succeeded":
+            claimed.discard(record.event.call_id)
         elif (
             record.event.type == "tool_failed"
             and record.event.attempts > 0
@@ -106,6 +110,8 @@ async def run_scenario(sc: Scenario) -> list[str]:
             failures.append(
                 f"CONCURRENCY: tool {record.event.call_id!r} executed without a claim"
             )
+        elif record.event.type == "tool_failed" and record.event.attempts > 0:
+            claimed.discard(record.event.call_id)
 
     return failures
 

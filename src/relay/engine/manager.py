@@ -49,10 +49,13 @@ class RunManager:
         task.add_done_callback(lambda t: self._on_done(run_id, t))
         self._tasks[run_id] = task
 
-    async def recover(self) -> list[str]:
-        """Called at startup: resume anything a dead worker left RUNNING."""
+    async def recover(self, *, exclusive: bool) -> list[str]:
+        """Resume interrupted runs when no prior worker can still be alive."""
         return await recover_interrupted_runs(
-            store=self._store, engine=self._engine, registry=self._registry
+            store=self._store,
+            engine=self._engine,
+            registry=self._registry,
+            exclusive=exclusive,
         )
 
     async def ready(self) -> None:

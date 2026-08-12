@@ -23,6 +23,7 @@ from __future__ import annotations
 
 import asyncio
 import uuid
+from collections.abc import Iterable
 from typing import Any
 
 from relay.config import Settings
@@ -348,15 +349,28 @@ class AgentEngine:
             return
 
         step = state.step + 1
-        events: list[AnyEvent] = [
-            LLMResponded(
-                step=step,
-                content=turn.content,
-                tool_calls=turn.tool_calls,
-                usage=turn.usage,
-                stop_reason=turn.stop_reason,
+        response = LLMResponded(
+            step=step,
+            content=turn.content,
+            tool_calls=turn.tool_calls,
+            usage=turn.usage,
+            stop_reason=turn.stop_reason,
+        )
+        duplicate_call_id = _first_duplicate(call.call_id for call in turn.tool_calls)
+        if duplicate_call_id is not None:
+            await self._append(
+                state,
+                [
+                    response,
+                    RunFailed(
+                        reason="invalid_provider_response",
+                        detail=f"duplicate tool call id {duplicate_call_id!r}",
+                    ),
+                ],
             )
-        ]
+            return
+
+        events: list[AnyEvent] = [response]
         if turn.tool_calls:
             for call in turn.tool_calls:
                 risk = (
@@ -448,6 +462,15 @@ class AgentEngine:
 
 def get_tool(registry: ToolRegistry, name: str) -> Tool:
     return registry.get(name)
+
+
+def _first_duplicate(values: Iterable[str]) -> str | None:
+    seen: set[str] = set()
+    for value in values:
+        if value in seen:
+            return value
+        seen.add(value)
+    return None
 
 
 class RunNotFoundError(ValueError):

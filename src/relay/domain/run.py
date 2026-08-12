@@ -181,10 +181,6 @@ def apply(state: RunState, record: EventRecord) -> RunState:  # noqa: C901
 
     if isinstance(ev, ToolCallRequested):
         _require(state, ev, RunStatus.RUNNING)
-        if any(pc.call.call_id == ev.call.call_id for pc in state.pending_calls):
-            raise InvalidTransition(
-                f"run {state.run_id}: duplicate pending call_id {ev.call.call_id!r}"
-            )
         return replace(
             state,
             pending_calls=state.pending_calls + (PendingCall(call=ev.call, risk=ev.risk),),

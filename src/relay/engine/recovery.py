@@ -1,7 +1,8 @@
 """Crash recovery.
 
-At startup (or on a schedule) the recovery scanner finds every run whose
-projection says RUNNING - i.e. a worker died mid-run - and resumes it.
+Under an exclusive-deployment guarantee, the recovery scanner finds every run
+whose projection says RUNNING and resumes it. Without a lease, callers must
+prove the prior worker is dead; scanning from an overlapping process is unsafe.
 
 The subtle case is ToolExecutionStarted with no result event. The crash may
 have happened before, during, or after the tool's side effect: the ledger
@@ -31,9 +32,18 @@ log = get_logger(__name__)
 
 
 async def recover_interrupted_runs(
-    *, store: EventStore, engine: AgentEngine, registry: ToolRegistry
+    *,
+    store: EventStore,
+    engine: AgentEngine,
+    registry: ToolRegistry,
+    exclusive: bool,
 ) -> list[str]:
-    """Find RUNNING runs, resume each. Returns the recovered run ids."""
+    """Resume RUNNING runs only after exclusive ownership is guaranteed."""
+    if not exclusive:
+        raise RuntimeError(
+            "recovery requires exclusive deployment ownership; a prior worker "
+            "may still be executing a claimed side effect"
+        )
     interrupted = await store.list_runs(status=RunStatus.RUNNING.value)
     recovered: list[str] = []
     for run_id in interrupted:

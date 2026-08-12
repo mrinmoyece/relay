@@ -91,7 +91,9 @@ async def test_crash_with_idempotent_call_resumes_automatically(make_engine, sto
 
     # process B: fresh engine, runs startup recovery
     engine_b = make_engine(MockLLMProvider(script=[MockTurn(content="42")]))
-    recovered = await recover_interrupted_runs(store=store, engine=engine_b, registry=registry)
+    recovered = await recover_interrupted_runs(
+        store=store, engine=engine_b, registry=registry, exclusive=True
+    )
     assert recovered == [run_id]
     state = await engine_b.get_state(run_id)
     assert state.status == RunStatus.COMPLETED
@@ -116,9 +118,9 @@ async def test_recovery_reclaims_a_persisted_idempotent_execution_claim(
     )
 
     engine_b = make_engine(MockLLMProvider(script=[MockTurn(content="42")]))
-    assert await recover_interrupted_runs(store=store, engine=engine_b, registry=registry) == [
-        run_id
-    ]
+    assert await recover_interrupted_runs(
+        store=store, engine=engine_b, registry=registry, exclusive=True
+    ) == [run_id]
     state = await engine_b.get_state(run_id)
     assert state.status == RunStatus.COMPLETED
     assert state.final_answer == "42"
@@ -145,7 +147,9 @@ async def test_crash_with_non_idempotent_call_escalates_to_human(
 
     # process B recovers: must NOT blindly re-send. Escalates instead.
     engine_b = make_engine(MockLLMProvider(script=[MockTurn(content="sent")]))
-    await recover_interrupted_runs(store=store, engine=engine_b, registry=registry)
+    await recover_interrupted_runs(
+        store=store, engine=engine_b, registry=registry, exclusive=True
+    )
     state = await engine_b.get_state(run_id)
     assert state.status == RunStatus.AWAITING_APPROVAL
     assert "crash recovery" in state.pending_approval.reason
@@ -161,6 +165,19 @@ async def test_recovery_ignores_healthy_runs(make_engine, store, registry):
     engine = make_engine(MockLLMProvider(script=[MockTurn(content="done")]))
     run_id = await engine.create_run(goal="quick")
     await engine.drive(run_id)
-    recovered = await recover_interrupted_runs(store=store, engine=engine, registry=registry)
+    recovered = await recover_interrupted_runs(
+        store=store, engine=engine, registry=registry, exclusive=True
+    )
     assert recovered == []
     assert (await engine.get_state(run_id)).status == RunStatus.COMPLETED
+
+
+async def test_recovery_rejects_nonexclusive_startup(make_engine, store, registry):
+    engine = make_engine(MockLLMProvider())
+    with pytest.raises(RuntimeError, match="exclusive deployment ownership"):
+        await recover_interrupted_runs(
+            store=store,
+            engine=engine,
+            registry=registry,
+            exclusive=False,
+        )

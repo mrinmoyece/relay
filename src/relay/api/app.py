@@ -92,9 +92,15 @@ def create_app(manager: RunManager | None = None) -> FastAPI:
         setup_tracing(service_name=settings.service_name, endpoint=settings.otel_endpoint)
         mgr = manager if manager is not None else await build_manager(settings)
         app.state.manager = mgr
-        recovered = await mgr.recover()
-        if recovered:
-            log.info("startup_recovery", extra={"ctx": {"recovered_runs": recovered}})
+        if settings.startup_recovery_exclusive:
+            recovered = await mgr.recover(exclusive=True)
+            if recovered:
+                log.info("startup_recovery", extra={"ctx": {"recovered_runs": recovered}})
+        else:
+            log.info(
+                "startup_recovery_disabled",
+                extra={"ctx": {"reason": "exclusive ownership not configured"}},
+            )
         yield
         await mgr.shutdown()
 

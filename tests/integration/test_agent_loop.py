@@ -172,6 +172,23 @@ async def test_unexpected_provider_exception_becomes_recorded_failure(store):
     assert [record.event.type for record in await store.read(run_id)][-1] == "run_failed"
 
 
+async def test_duplicate_provider_tool_call_ids_fail_without_pending_calls(make_engine, store):
+    duplicate_calls = (
+        ToolCallSpec(call_id="duplicate", tool_name="calculator", arguments={"expression": "1"}),
+        ToolCallSpec(call_id="duplicate", tool_name="calculator", arguments={"expression": "2"}),
+    )
+    engine = make_engine(MockLLMProvider(script=[MockTurn(tool_calls=duplicate_calls)]))
+    run_id = await engine.create_run(goal="reject malformed provider output")
+    state = await engine.drive(run_id)
+    assert state.status == RunStatus.FAILED
+    assert "duplicate tool call id" in state.error
+    assert state.pending_calls == ()
+    assert [record.event.type for record in await store.read(run_id)][-2:] == [
+        "llm_responded",
+        "run_failed",
+    ]
+
+
 async def test_persisted_execution_claim_fences_second_driver(store):
     executions = 0
 

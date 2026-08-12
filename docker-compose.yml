@@ -12,6 +12,7 @@ services:
       RELAY_PROVIDER: ${RELAY_PROVIDER:-mock}   # set to "anthropic" + key for real runs
       RELAY_ANTHROPIC_API_KEY: ${ANTHROPIC_API_KEY:-}
       RELAY_OTEL_ENDPOINT: ${RELAY_OTEL_ENDPOINT:-}
+      RELAY_STARTUP_RECOVERY_EXCLUSIVE: "true" # compose runs exactly one API process
     depends_on:
       db:
         condition: service_healthy
