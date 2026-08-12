@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from functools import lru_cache
 
+from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -29,9 +30,11 @@ class Settings(BaseSettings):
     service_name: str = "relay"
 
     # Engine tuning
-    tool_timeout_seconds: float = 30.0
-    tool_max_attempts: int = 3
-    llm_max_attempts: int = 3
+    tool_timeout_seconds: float = Field(default=30.0, gt=0)
+    tool_max_attempts: int = Field(default=3, ge=1, le=10)
+    llm_timeout_seconds: float = Field(default=120.0, gt=0)
+    llm_max_attempts: int = Field(default=3, ge=1, le=10)
+    llm_retry_backoff_seconds: float = Field(default=0.25, ge=0, le=60)
 
     @property
     def durable(self) -> bool:

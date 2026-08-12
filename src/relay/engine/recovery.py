@@ -3,7 +3,7 @@
 At startup (or on a schedule) the recovery scanner finds every run whose
 projection says RUNNING - i.e. a worker died mid-run - and resumes it.
 
-The subtle case is a ToolCallRequested with no result event. The crash may
+The subtle case is ToolExecutionStarted with no result event. The crash may
 have happened before, during, or after the tool's side effect: the ledger
 cannot know. Relay resolves the ambiguity by tool contract:
 
@@ -54,22 +54,28 @@ async def _recover_one(
 
     events: list = [RunResumed(recovered_after_seq=state.last_seq)]
 
-    # Ambiguous in-flight call? Escalate non-idempotent ones to a human.
+    # A persisted execution claim without a result is ambiguous. A request
+    # that was never claimed is safe for the normal loop to process.
     if state.pending_calls:
+        if any(pc.execution_started for pc in state.pending_calls[1:]):
+            raise RuntimeError(
+                f"run {run_id}: multiple/out-of-order execution claims violate "
+                "sequential tool processing"
+            )
         pc = state.pending_calls[0]
         try:
             tool = registry.scoped(state.allowed_tools).get(pc.call.tool_name)
             idempotent = tool.idempotent
         except UnknownToolError:
             idempotent = False
-        if not idempotent:
+        if pc.execution_started and not idempotent:
             events.append(
                 ApprovalRequired(
                     approval_id=uuid.uuid4().hex,
                     call=pc.call,
                     risk=pc.risk,
                     reason=(
-                        "crash recovery: this non-idempotent call was requested "
+                        "crash recovery: this non-idempotent call was claimed "
                         "before the crash and may or may not have executed. "
                         "Approve to run it (again), deny to skip it."
                     ),

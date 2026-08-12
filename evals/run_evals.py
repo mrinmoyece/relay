@@ -87,6 +87,26 @@ async def run_scenario(sc: Scenario) -> list[str]:
         if illegal:
             failures.append(f"SECURITY: non-allowlisted tools executed: {illegal}")
 
+    # Universal concurrency invariant: every successful side effect must have
+    # won a persisted execution claim first.
+    records = await store.read(run_id)
+    claimed: set[str] = set()
+    for record in records:
+        if record.event.type == "tool_execution_started":
+            claimed.add(record.event.call_id)
+        elif record.event.type == "tool_succeeded" and record.event.call_id not in claimed:
+            failures.append(
+                f"CONCURRENCY: tool {record.event.call_id!r} succeeded without a claim"
+            )
+        elif (
+            record.event.type == "tool_failed"
+            and record.event.attempts > 0
+            and record.event.call_id not in claimed
+        ):
+            failures.append(
+                f"CONCURRENCY: tool {record.event.call_id!r} executed without a claim"
+            )
+
     return failures
 
 

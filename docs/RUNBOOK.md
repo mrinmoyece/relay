@@ -12,7 +12,8 @@ Startup sequence: schema applied idempotently → crash recovery scan (log line 
 
 ## Health & monitoring
 
-- `GET /healthz` — liveness.
+- `GET /healthz` — process liveness; does not touch dependencies.
+- `GET /readyz` — readiness; returns 503 when the event store cannot be read.
 - `GET /metrics` — Prometheus text format: `relay_runs_started_total`,
   `relay_runs_finished_total{status=…}`, `relay_llm_calls_total`,
   `relay_llm_tokens_total{direction=…}`, `relay_llm_cost_usd_total`,
@@ -36,7 +37,7 @@ Startup sequence: schema applied idempotently → crash recovery scan (log line 
 4. Anything terminal → read the last event; the reason is recorded (`run_failed.detail`, `budget_exceeded`).
 
 ### "Did the agent actually send that email?"
-`GET /v1/runs/{id}/events`. `tool_succeeded` for `send_email` → yes, with timestamp and approver in the preceding `approval_granted`. `tool_call_requested` with no result + a later crash-recovery `approval_required` → genuinely ambiguous: check the mail provider's outbox, then approve ("run again") or deny ("skip") accordingly.
+`GET /v1/runs/{id}/events`. `tool_succeeded` for `send_email` → yes, with timestamp and approver in the preceding `approval_granted`. `tool_execution_started` with no result + a later crash-recovery `approval_required` → genuinely ambiguous: check the mail provider's outbox, then approve ("run again") or deny ("skip") accordingly.
 
 ### "The agent is burning money"
 Per-run: `POST /v1/runs/{id}/cancel` (wins at the next append). Fleet-wide: set `RELAY_PROVIDER=mock` and restart (hard stop, in-flight runs resume later against the mock — visible and reversible), or stop the service; ledgers are durable.

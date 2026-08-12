@@ -14,8 +14,9 @@ Relay assumes three untrusted inputs:
    injection). Contained by per-run tool allowlists, deny-by-default policy,
    human approval on destructive actions, and budget circuit breakers.
 2. **Tool arguments** — always validated by tools; guards include AST-only
-   expression evaluation (no eval), SSRF domain allowlists with redirects
-   disabled, and path-traversal confinement.
+   expression evaluation (no eval) with complexity/magnitude caps, SSRF
+   domain allowlists with redirects disabled, bounded writes, and
+   path-traversal confinement.
 3. **Tool code** — executor isolates failures (timeouts, exception
    containment), but in-process guards do NOT contain arbitrary code
    execution. Code-execution tools require an external sandbox

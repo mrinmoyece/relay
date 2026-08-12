@@ -44,6 +44,10 @@ _BIN_OPS: dict[type, Callable[[Any, Any], Any]] = {
     ast.Pow: operator.pow,
 }
 _UNARY_OPS: dict[type, Callable[[Any], Any]] = {ast.UAdd: operator.pos, ast.USub: operator.neg}
+_MAX_AST_NODES = 200
+_MAX_POWER_EXPONENT = 100
+_MAX_ABS_RESULT = 1e100
+_MAX_FILE_CHARS = 1_000_000
 
 
 def _eval_node(node: ast.AST) -> float:
@@ -52,7 +56,16 @@ def _eval_node(node: ast.AST) -> float:
     if isinstance(node, ast.Constant) and isinstance(node.value, (int, float)):
         return node.value
     if isinstance(node, ast.BinOp) and type(node.op) in _BIN_OPS:
-        return _BIN_OPS[type(node.op)](_eval_node(node.left), _eval_node(node.right))
+        left = _eval_node(node.left)
+        right = _eval_node(node.right)
+        if isinstance(node.op, ast.Pow) and (
+            abs(right) > _MAX_POWER_EXPONENT or abs(left) > _MAX_ABS_RESULT
+        ):
+            raise ToolExecutionError("power operation exceeds safe limits", retryable=False)
+        result = _BIN_OPS[type(node.op)](left, right)
+        if abs(result) > _MAX_ABS_RESULT:
+            raise ToolExecutionError("expression result exceeds safe limits", retryable=False)
+        return result
     if isinstance(node, ast.UnaryOp) and type(node.op) in _UNARY_OPS:
         return _UNARY_OPS[type(node.op)](_eval_node(node.operand))
     raise ToolExecutionError(
@@ -70,13 +83,12 @@ async def _calculator(args: dict[str, Any]) -> str:
         tree = ast.parse(expression, mode="eval")
     except SyntaxError as e:
         raise ToolExecutionError(f"invalid expression: {e}", retryable=False) from e
-    if any(isinstance(n, ast.Pow) for n in ast.walk(tree)):
-        # 9**9**9 would pin the CPU; cap exponent size instead of banning.
-        for n in ast.walk(tree):
-            if isinstance(n, ast.Constant) and isinstance(n.value, (int, float)):
-                if abs(n.value) > 1000:
-                    raise ToolExecutionError("operands too large for pow", retryable=False)
-    return str(_eval_node(tree))
+    if sum(1 for _ in ast.walk(tree)) > _MAX_AST_NODES:
+        raise ToolExecutionError("expression is too complex", retryable=False)
+    try:
+        return str(_eval_node(tree))
+    except (ArithmeticError, OverflowError) as e:
+        raise ToolExecutionError(f"invalid arithmetic: {e}", retryable=False) from e
 
 
 calculator = Tool(
@@ -152,6 +164,10 @@ def make_write_file(workspace: Path) -> Tool:
         content = str(args.get("content", ""))
         if not rel:
             raise ToolExecutionError("missing 'path'", retryable=False)
+        if len(content) > _MAX_FILE_CHARS:
+            raise ToolExecutionError(
+                f"content exceeds {_MAX_FILE_CHARS} character limit", retryable=False
+            )
         target = (workspace / rel).resolve()
         if not target.is_relative_to(workspace.resolve()):
             raise ToolExecutionError(

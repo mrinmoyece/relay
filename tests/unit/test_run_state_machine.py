@@ -3,6 +3,8 @@ If this file is green, the core invariants of the whole system hold."""
 
 from __future__ import annotations
 
+import json
+
 import pytest
 
 from relay.domain.budget import Budget
@@ -17,7 +19,9 @@ from relay.domain.events import (
     RunCompleted,
     RunCreated,
     ToolCallRequested,
+    ToolExecutionStarted,
     ToolSucceeded,
+    event_adapter,
     utcnow,
 )
 from relay.domain.run import InvalidTransition, RunState, RunStatus, apply, replay
@@ -60,11 +64,27 @@ def test_tool_lifecycle_appends_result_to_transcript():
     state = apply(state, rec(2, LLMResponded(step=1, tool_calls=(call,))))
     state = apply(state, rec(3, ToolCallRequested(step=1, call=call, risk=RiskLevel.READ_ONLY)))
     assert len(state.pending_calls) == 1
-    state = apply(state, rec(4, ToolSucceeded(call_id="c1", tool_name="calculator", output="2")))
+    started = ToolExecutionStarted(call_id="c1", tool_name="calculator")
+    state = apply(state, rec(4, started))
+    assert state.pending_calls[0].execution_started
+    state = apply(state, rec(5, ToolSucceeded(call_id="c1", tool_name="calculator", output="2")))
     assert state.pending_calls == ()
     assert state.transcript[-1].role == "tool"
     assert state.transcript[-1].content == "2"
     assert state.transcript[-1].tool_call_id == "c1"
+    assert event_adapter.validate_python(json.loads(started.model_dump_json())) == started
+
+
+def test_legacy_tool_result_without_execution_claim_still_replays():
+    call = ToolCallSpec(call_id="c1", tool_name="calculator", arguments={})
+    state = apply(RunState(run_id=RUN), rec(1, created()))
+    state = apply(state, rec(2, ToolCallRequested(step=1, call=call, risk=RiskLevel.READ_ONLY)))
+    state = apply(
+        state,
+        rec(3, ToolSucceeded(call_id="c1", tool_name="calculator", output="2")),
+    )
+    assert state.pending_calls == ()
+    assert state.transcript[-1].content == "2"
 
 
 def test_approval_flow_parks_and_resumes():
@@ -169,9 +189,10 @@ def test_replay_is_deterministic():
         rec(1, created()),
         rec(2, LLMResponded(step=1, tool_calls=(call,))),
         rec(3, ToolCallRequested(step=1, call=call, risk=RiskLevel.READ_ONLY)),
-        rec(4, ToolSucceeded(call_id="c1", tool_name="calculator", output="1")),
-        rec(5, LLMResponded(step=2, content="1")),
-        rec(6, RunCompleted(final_answer="1")),
+        rec(4, ToolExecutionStarted(call_id="c1", tool_name="calculator")),
+        rec(5, ToolSucceeded(call_id="c1", tool_name="calculator", output="1")),
+        rec(6, LLMResponded(step=2, content="1")),
+        rec(7, RunCompleted(final_answer="1")),
     ]
     a, b = replay(RUN, records), replay(RUN, records)
     assert a == b

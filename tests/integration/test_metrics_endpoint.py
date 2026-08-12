@@ -2,10 +2,9 @@
 
 from __future__ import annotations
 
-from tests.integration.test_api import build_manager, client_for, wait_for_terminal
-
 from relay.domain.types import ToolCallSpec
 from relay.llm.mock import MockTurn
+from tests.integration.test_api import build_manager, client_for, wait_for_terminal
 
 
 async def test_metrics_endpoint_reflects_a_run():

@@ -5,7 +5,7 @@
 [![CI](https://img.shields.io/badge/CI-passing-brightgreen)]() [![Python](https://img.shields.io/badge/python-3.10%2B-blue)]() [![License: MIT](https://img.shields.io/badge/license-MIT-lightgrey)]()
 
 ```
-47 unit + integration tests · 6/6 behavioral evals (CI-gated) · runs with zero config, no API key
+60 unit + integration tests · 6/6 behavioral evals (CI-gated) · runs with zero config, no API key
 ```
 
 ## The problem
@@ -17,7 +17,7 @@ Relay is the runtime layer that fixes those failure modes — not another agent 
 | Production failure | Relay's answer |
 |---|---|
 | Worker crashes mid-run, progress lost | Event-sourced runs: every step is durable; recovery replays the log and resumes |
-| Crash *during* a side effect ("did the email send?") | Idempotency contracts: idempotent tools re-execute, non-idempotent ones escalate to a human |
+| Crash *during* a side effect ("did the email send?") | Persisted execution claims + idempotency contracts; ambiguous non-idempotent calls escalate to a human |
 | Runaway loops, unbounded spend | Runtime-enforced budgets (steps, tokens, USD) — a circuit breaker, not a prompt suggestion |
 | Unreviewed destructive actions | Policy engine + human-in-the-loop gates; runs park durably in `AWAITING_APPROVAL` |
 | "Why did it do that?" | The event ledger IS the audit log; any run can be replayed step by step |
@@ -51,7 +51,8 @@ flowchart LR
     TOOLS["Tools<br/>read_only / write / destructive"]
 
     API --> Engine
-    LOOP --> POL --> EXEC --> TOOLS
+    LOOP --> POL -->|"persist execution claim"| STORE
+    STORE --> EXEC --> TOOLS
     LOOP <--> Providers
     Engine <--> STORE
     REC --> STORE
@@ -76,6 +77,7 @@ sequenceDiagram
     E->>S: append ApprovalRequired (run parks, durably)
     H->>E: POST /approvals {approve}
     E->>S: append ApprovalGranted
+    E->>S: append ToolExecutionStarted
     E->>E: execute tool
     E->>S: append ToolSucceeded
     E->>L: complete(updated transcript)
@@ -105,7 +107,7 @@ stateDiagram-v2
 # zero-config: in-memory store + deterministic mock model, no secrets
 pip install -e ".[dev]"
 make demo     # watch 4 stories: tools, HITL approval, crash recovery, memory
-make test     # 47 tests
+make test     # 60 tests
 make evals    # 6 behavioral scenarios (same suite gates CI)
 
 # full durable stack: Postgres + API (+ optional Jaeger tracing)
@@ -121,7 +123,7 @@ curl localhost:8000/v1/runs/<run_id>/events   # read the ledger
 
 **1. Exactly-once is a lie; Relay is honest about it.** `ToolCallRequested` is persisted *before* execution, the result *after*. If a worker dies between the two, the ledger cannot know whether the side effect happened. Relay resolves the ambiguity by contract: tools declare `idempotent`; idempotent calls are re-executed on recovery, non-idempotent ones (send_email) are escalated to a human with full context. See `engine/recovery.py` and ADR-0003.
 
-**2. Concurrency without distributed locks.** Every append carries `expected_version`; the store rejects stale writers (`ConcurrencyError`), so two workers racing on one run cannot both win — the loser re-reads the log and defers to whatever it says. Postgres enforces this with a row lock on the projection plus a composite PK as a physical backstop. See `store/postgres.py`.
+**2. Side-effect fencing without distributed locks.** Every append carries `expected_version`; before a tool runs, the worker must append `ToolExecutionStarted`. Racing workers cannot both win that execution claim, so only one reaches the handler. Provider calls may still be duplicated before one writer wins its response append, which wastes bounded spend but cannot fork ledger state. Postgres enforces append ordering with a row lock plus a composite PK. See `store/postgres.py` and ADR-0003.
 
 **3. Budgets as circuit breakers.** `max_steps` / `max_tokens` / `max_cost_usd` are checked by the runtime before every model call. The eval suite includes an adversarial provider that loops forever — the run halts at exactly the step budget, every time.
 
@@ -145,7 +147,7 @@ src/relay/
 ├── memory/        long-term memory store + retrieval
 ├── observability/ OTel tracing (no-op fallback), structured JSON logging
 └── api/           FastAPI: create/inspect/approve/cancel/replay runs
-tests/             47 unit + integration tests
+tests/             60 unit + integration tests
 evals/             behavioral scenario suite (gates CI)
 docs/              architecture, 6 ADRs, failure modes, runbook, limitations
 ```
@@ -159,6 +161,8 @@ docs/              architecture, 6 ADRs, failure modes, runbook, limitations
 | [docs/FAILURE_MODES.md](docs/FAILURE_MODES.md) | What breaks, how Relay behaves, what the blast radius is |
 | [docs/RUNBOOK.md](docs/RUNBOOK.md) | Operating it: deployment, monitoring, incident procedures |
 | [docs/EVALS.md](docs/EVALS.md) | Eval methodology + latest results |
+| [docs/ai-system-design.md](docs/ai-system-design.md) | Goals, lifecycle, memory, safety, evaluation, and scaling tradeoffs |
+| [docs/enterprise-readiness.md](docs/enterprise-readiness.md) | Control evidence, deployment gates, and residual production gaps |
 | [docs/LIMITATIONS.md](docs/LIMITATIONS.md) | Honest list of what this doesn't do, and the production upgrade path for each |
 | [AGENTS.md](AGENTS.md) | Binding standards for AI coding agents working on this repo (invariants, quality gates, security rules) |
 | [agent-skills/](agent-skills/) | Procedural skills for common changes - add-tool, add-provider, add-event - each with a review checklist |

@@ -132,6 +132,14 @@ async def test_unknown_run_is_404_and_cancel_works():
     async with client:
         async with app.router.lifespan_context(app):
             assert (await client.get("/v1/runs/nope")).status_code == 404
+            assert (await client.post("/v1/runs/nope/cancel")).status_code == 404
+            assert (
+                await client.post(
+                    "/v1/runs/nope/approvals/nope",
+                    json={"decision": "approve", "approver": "operator"},
+                )
+            ).status_code == 404
+            assert (await client.get("/readyz")).status_code == 200
 
             run_id = (await client.post("/v1/runs", json={"goal": "g"})).json()["run_id"]
             await wait_for_terminal(client, run_id)

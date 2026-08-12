@@ -55,6 +55,10 @@ class RunManager:
             store=self._store, engine=self._engine, registry=self._registry
         )
 
+    async def ready(self) -> None:
+        """Verify that the configured durability boundary is reachable."""
+        await self._store.read("__relay_readiness__", from_seq=0)
+
     async def shutdown(self) -> None:
         for task in self._tasks.values():
             task.cancel()

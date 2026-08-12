@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import pytest
 
+from relay.domain.events import ToolExecutionStarted
 from relay.domain.run import RunStatus
 from relay.domain.types import ToolCallSpec
 from relay.engine.recovery import recover_interrupted_runs
@@ -100,6 +101,29 @@ async def test_crash_with_idempotent_call_resumes_automatically(make_engine, sto
     assert "run_resumed" in types
 
 
+async def test_recovery_reclaims_a_persisted_idempotent_execution_claim(
+    make_engine, store, registry
+):
+    calc = ToolCallSpec(call_id="c1", tool_name="calculator", arguments={"expression": "6*7"})
+    engine_a = make_engine(MockLLMProvider(script=[MockTurn(tool_calls=(calc,))]))
+    run_id = await engine_a.create_run(goal="what is 6*7")
+    state = await engine_a.get_state(run_id)
+    await engine_a._advance_with_model(state)  # noqa: SLF001
+    state = await engine_a.get_state(run_id)
+    await engine_a._append(  # noqa: SLF001
+        state,
+        [ToolExecutionStarted(call_id="c1", tool_name="calculator")],
+    )
+
+    engine_b = make_engine(MockLLMProvider(script=[MockTurn(content="42")]))
+    assert await recover_interrupted_runs(store=store, engine=engine_b, registry=registry) == [
+        run_id
+    ]
+    state = await engine_b.get_state(run_id)
+    assert state.status == RunStatus.COMPLETED
+    assert state.final_answer == "42"
+
+
 async def test_crash_with_non_idempotent_call_escalates_to_human(
     make_engine, store, registry
 ):
@@ -113,6 +137,11 @@ async def test_crash_with_non_idempotent_call_escalates_to_human(
     )
     state = await engine_a.get_state(run_id)
     await engine_a._advance_with_model(state)  # noqa: SLF001
+    state = await engine_a.get_state(run_id)
+    await engine_a._append(  # noqa: SLF001
+        state,
+        [ToolExecutionStarted(call_id="e1", tool_name="send_email")],
+    )
 
     # process B recovers: must NOT blindly re-send. Escalates instead.
     engine_b = make_engine(MockLLMProvider(script=[MockTurn(content="sent")]))
