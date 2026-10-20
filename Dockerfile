@@ -1,11 +1,11 @@
 # Multi-stage build: builder installs, runtime stays slim and non-root.
-FROM python:3.12-slim AS builder
+FROM python:3.14-slim AS builder
 WORKDIR /app
 COPY pyproject.toml README.md LICENSE ./
 COPY src ./src
 RUN pip install --no-cache-dir ".[postgres,anthropic,otel]"
 
-FROM python:3.12-slim
+FROM python:3.14-slim
 # Never run as root in production containers.
 RUN useradd --create-home --uid 10001 relay
 WORKDIR /app
